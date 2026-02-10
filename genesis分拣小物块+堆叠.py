@@ -30,6 +30,18 @@ def create_cube(pos, color):
         ),
         surface=gs.surfaces.Rough(color=color)
     )
+# 定义一个更鲁棒的平滑移动函数
+def move_to_smooth(goal_qpos, steps=100):
+    if goal_qpos is None: return
+    start_qpos = franka.get_dofs_position()
+    # 简单的线性插值 (Joint Space Interpolation)
+    for i in range(steps):
+        t = (i + 1) / steps
+        interp_q = start_qpos + (goal_qpos - start_qpos) * t
+        franka.control_dofs_position(interp_q[:-2], motors_dof)
+        # 维持夹爪握力
+        franka.control_dofs_force(np.array([-15.0, -15.0]), fingers_dof)
+        scene.step()
 
 # 随机生成 4 个物块，两种颜色
 cube_list = []
@@ -54,6 +66,13 @@ for i in range(4):
         "target_pos": targets[color_idx],
         "size": 0.06 
     })
+
+# 在 build() 之前定义堆叠管理器
+# 键是目标的坐标（转为 tuple 方便寻址），值是当前已堆叠的数量
+stack_counts = {tuple(target.tolist()): 0 for target in targets}
+
+# 物块的基础厚度
+CUBE_HEIGHT = 0.06
 
 ########################## build ##########################
 scene.build()
@@ -134,7 +153,7 @@ for i, item in enumerate(cube_list):
         print(">>> 步骤2：下探到抓取高度")
         # 0.11 是偏置。如果你的物块 size 是 0.04，中心在 0.02，那么目标是 0.13
         # 如果物块 size 是 0.06，中心在 0.03，那么目标是 0.14
-        grasp_height = 0.11 + (0.03 if item.get('size', 0.04) == 0.06 else 0.02)
+        grasp_height = 0.095 + (0.03 if item.get('size', 0.04) == 0.06 else 0.02)
         qpos_reach = franka.inverse_kinematics(link=ee_link, pos=curr_pos + [0, 0, grasp_height], quat=np.array([0, 1, 0, 0]))
         
         # 仅控制手臂下探，保持手指张开
@@ -158,25 +177,42 @@ for i, item in enumerate(cube_list):
                 franka.control_dofs_position(waypoint[:-2], motors_dof)
                 franka.control_dofs_force(np.array([-10.0, -10.0]), fingers_dof)
                 scene.step()
+        # --- 步骤 5：转移到堆叠目标位 ---
+        print(f">>> 步骤5：移动到分拣区域进行堆叠")
         
-        # 5. 转移到目标 (也需要维持握力)
-        print(">>> 步骤5：移动到分拣区域")
-        # 注意：这里不能简单用 move_to，因为 move_to 内部没有持续施加力控逻辑
-        # 我们手动处理这段移动
-        qpos_target = franka.inverse_kinematics(link=ee_link, pos=target + [0, 0, 0.2], quat=np.array([0, 1, 0, 0]))
-        path = franka.plan_path(qpos_goal=qpos_target, num_waypoints=150)
-        for waypoint in path:
-            franka.control_dofs_position(waypoint[:-2], motors_dof)
-            franka.control_dofs_force(np.array([-10.0, -10.0]), fingers_dof)
-            scene.step()
+        # 获取当前目标点已经堆了几个
+        current_stack_num = stack_counts[tuple(target.tolist())]
         
-        # 6. 释放
-        print(">>> 步骤6：到达目标，释放物块")
+        # 计算本次放置的精确高度
+        # 基础中心高度是 0.03，每多一个就加 0.06
+        place_z = 0.03 + (current_stack_num * CUBE_HEIGHT)
+        
+        # 5.1 移动到堆叠点正上方 (hover_pos)
+        hover_pos = np.array([target[0], target[1], place_z + 0.15])
+        qpos_hover = franka.inverse_kinematics(link=ee_link, pos=hover_pos, quat=np.array([0, 1, 0, 0]))
+        move_to_smooth(qpos_hover, steps=120)
+
+        # 5.2 垂直缓慢下探到放置位 (place_pos)
+        place_pos = np.array([target[0], target[1], place_z + 0.11 + 0.005])
+        qpos_place = franka.inverse_kinematics(link=ee_link, pos=place_pos, quat=np.array([0, 1, 0, 0]))
+        move_to_smooth(qpos_place, steps=60)
+
+        # --- 步骤 6：精准释放 ---
+        print(">>> 步骤6：触底释放")
         target_q = franka.get_dofs_position()
-        target_q[-2:] = 0.04
-        franka.control_dofs_position(target_q) # 切换回位置控制张开手指
+        target_q[-2:] = 0.04 # 张开
+        franka.control_dofs_position(target_q)
+        # 释放后多停留一会儿，让物块稳在堆叠塔上
         for _ in range(150): scene.step() 
         
+        # 更新该位置的堆叠计数
+        stack_counts[tuple(target.tolist())] += 1
+
+        # 6.1 垂直抬起（防止张开的手指扫倒刚堆好的塔）
+        lift_pos = place_pos + [0, 0, 0.1]
+        qpos_post_lift = franka.inverse_kinematics(link=ee_link, pos=lift_pos, quat=np.array([0, 1, 0, 0]))
+        move_to(lift_pos, num_waypoints=50)
+
         # 7. 彻底重置 (Reset)
         # 这步放在最后，为下一个物块做准备
         print(">>> 步骤7：完成分拣，重置状态")
