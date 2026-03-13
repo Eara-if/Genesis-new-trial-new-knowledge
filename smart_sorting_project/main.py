@@ -7,7 +7,11 @@ from assets_manager import spawn_random_boxes
 gs.init(backend=gs.gpu)
 scene = gs.Scene(
     sim_options=gs.options.SimOptions(dt=0.005, substeps=10),
-    viewer_options=gs.options.ViewerOptions(camera_pos=(2.0, 1.5, 1.5), camera_lookat=(0.5, 0.0, 0.5), camera_fov=40),
+    viewer_options=gs.options.ViewerOptions(
+        camera_pos=(0.5, 0.0, 2.5),    # 设置在上方中心 (x=0.5, y=0, z=2.5)
+        camera_lookat=(0.5, 0.0, 0.0), # 相机垂直向下看
+        camera_fov=45                  # 视场角，可根据需要调整
+        ),
     show_viewer=True,
 )
 

@@ -1,0 +1,13 @@
+<robot name="box_1">
+        <link name="base">
+            <inertial>
+                <mass value="0.2"/>
+                <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+            </inertial>
+            <visual>
+                <geometry><mesh filename="box_1.obj" scale="1 1 1"/></geometry>
+            </visual>
+            <collision>
+                <geometry><box size="0.04484911834283769 0.04384248606168542 0.03292494103337024"/></geometry>
+            </collision>
+        </link></robot>
